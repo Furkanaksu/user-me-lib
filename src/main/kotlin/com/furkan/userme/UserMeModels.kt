@@ -48,6 +48,46 @@ data class SessionResponse(
     val lastSeenAt: String
 )
 
+/**
+ * Listede ve "benim bilgilerim" ucunda donen kullanici: oturum + (varsa) hesap bilgisi.
+ * Hesabi olmayan kayitlar anonim cihazlardir: accountId, email ve displayName null gelir.
+ */
+@Serializable
+data class UserListItem(
+    val sessionId: Int,
+    val accountId: Int?,
+    val email: String?,
+    val displayName: String?,
+    val deviceId: String,
+    val platform: String?,
+    val appVersion: String?,
+    val appName: String?,
+    val language: String?,
+    val city: String?,
+    val latitude: Double?,
+    val longitude: Double?,
+    val metadata: JsonObject,
+    val openCount: Int,
+    val firstSeenAt: String,
+    val lastSeenAt: String
+)
+
+@Serializable
+data class PaginatedUsersResponse(
+    val data: List<UserListItem>,
+    val page: Int,
+    val size: Int,
+    val totalItems: Long,
+    val totalPages: Int
+)
+
+@Serializable
+data class UserFilterOptionsResponse(
+    val languages: List<String>,
+    val appVersions: List<String>,
+    val appNames: List<String>
+)
+
 @Serializable
 data class UserMeErrorResponse(
     val status: String = "fail",

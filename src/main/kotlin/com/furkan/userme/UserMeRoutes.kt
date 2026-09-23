@@ -20,10 +20,12 @@ import io.ktor.server.routing.route
  *
  * Uc noktalar (basePath'e gore, varsayilan `/me`):
  * - `POST {basePath}/session`  uygulama acilisinda oturum kaydi
- * - `GET  {basePath}`          benim oturumum (giris varsa hesabin, yoksa `?deviceId=` ile cihazin)
+ * - `GET  {basePath}`          benim bilgilerim (giris varsa hesap + oturum, yoksa `?deviceId=`)
+ *
+ * Kayitli kullanicilarin listesi ayri monte edilir: [userListRoutes].
  */
 fun Route.userMeRoutes(config: UserMeConfig) {
-    val handlers = UserMeHandlers(config, UserMeSessions(config))
+    val handlers = UserMeHandlers(config, UserMeSessions(config), UserMeUsers(config))
 
     route(config.basePath) {
         post("/session") { handlers.upsertSession(call) }
@@ -31,9 +33,32 @@ fun Route.userMeRoutes(config: UserMeConfig) {
     }
 }
 
+/**
+ * Kayitli kullanicilarin listesi. Herkesin email'ini donduren bir uctur; bu yuzden AYRI
+ * monte edilir ve korumasi projeye birakilir:
+ *
+ * ```
+ * authenticate("admin") { userListRoutes(me) }
+ * ```
+ *
+ * Uc noktalar (usersPath'e gore, varsayilan `/users`):
+ * - `GET {usersPath}`          sayfali liste — `q`, `language`, `appVersion`, `appName`,
+ *                              `registered`, `page`, `size`
+ * - `GET {usersPath}/filters`  dropdown degerleri
+ */
+fun Route.userListRoutes(config: UserMeConfig) {
+    val handlers = UserMeHandlers(config, UserMeSessions(config), UserMeUsers(config))
+
+    route(config.usersPath) {
+        get { handlers.listUsers(call) }
+        get("/filters") { handlers.filterOptions(call) }
+    }
+}
+
 internal class UserMeHandlers(
     private val config: UserMeConfig,
-    private val sessions: UserMeSessions
+    private val sessions: UserMeSessions,
+    private val users: UserMeUsers
 ) {
 
     suspend fun upsertSession(call: ApplicationCall) {
@@ -53,11 +78,11 @@ internal class UserMeHandlers(
         call.respond(session)
     }
 
-    /** Giris varsa hesabin oturumu; yoksa sorgudaki cihazin oturumu. */
+    /** Giris varsa hesabin bilgileri; yoksa sorgudaki cihazin bilgileri. */
     suspend fun me(call: ApplicationCall) {
         val accountId = config.accountId(call)
-        val session = if (accountId != null) {
-            sessions.findByAccount(accountId)
+        val user = if (accountId != null) {
+            users.findByAccount(accountId)
         } else {
             val deviceId = call.request.queryParameters["deviceId"]?.trim()
             if (deviceId.isNullOrBlank()) {
@@ -67,13 +92,51 @@ internal class UserMeHandlers(
                 )
                 return
             }
-            sessions.findByDevice(deviceId)
+            users.findByDevice(deviceId)
         }
 
-        if (session == null) {
-            call.respond(HttpStatusCode.NotFound, UserMeErrorResponse(error = "Oturum bulunamadi"))
+        if (user == null) {
+            call.respond(HttpStatusCode.NotFound, UserMeErrorResponse(error = "Kullanici bulunamadi"))
         } else {
-            call.respond(session)
+            call.respond(user)
         }
+    }
+
+    suspend fun listUsers(call: ApplicationCall) {
+        val params = call.request.queryParameters
+        val page = params["page"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val size = (params["size"]?.toIntOrNull() ?: config.defaultPageSize).coerceIn(1, config.maxPageSize)
+
+        val registered = when (params["registered"]?.lowercase()) {
+            "true" -> true
+            "false" -> false
+            else -> null
+        }
+
+        val (items, total) = users.query(
+            filter = UserQuery(
+                q = params["q"],
+                language = params["language"],
+                appVersion = params["appVersion"],
+                appName = params["appName"],
+                registered = registered
+            ),
+            page = page,
+            size = size
+        )
+
+        call.respond(
+            PaginatedUsersResponse(
+                data = items,
+                page = page,
+                size = size,
+                totalItems = total,
+                totalPages = if (total == 0L) 1 else ((total + size - 1) / size).toInt()
+            )
+        )
+    }
+
+    suspend fun filterOptions(call: ApplicationCall) {
+        call.respond(users.filterOptions())
     }
 }

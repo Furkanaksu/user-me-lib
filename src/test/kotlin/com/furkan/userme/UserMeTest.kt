@@ -133,16 +133,16 @@ class UserMeTest {
     }
 
     @Test
-    fun `me ucu giris varsa hesabin, yoksa cihazin oturumunu doner`() = testApplication {
+    fun `me ucu giris varsa hesabin, yoksa cihazin bilgilerini doner`() = testApplication {
         setup(config("u6"))
         session("""{"deviceId":"cihaz-X","appName":"dizibook"}""")
         session("""{"deviceId":"cihaz-Y"}""", account = 3)
 
-        val byDevice = client.get("/me?deviceId=cihaz-X").decode<SessionResponse>()
+        val byDevice = client.get("/me?deviceId=cihaz-X").decode<UserListItem>()
         assertEquals("dizibook", byDevice.appName)
         assertNull(byDevice.accountId)
 
-        val byAccount = client.get("/me") { header("X-Account", "3") }.decode<SessionResponse>()
+        val byAccount = client.get("/me") { header("X-Account", "3") }.decode<UserListItem>()
         assertEquals(3, byAccount.accountId)
 
         assertEquals(HttpStatusCode.BadRequest, client.get("/me").status)
