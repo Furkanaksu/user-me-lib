@@ -68,6 +68,7 @@ class UserListTest {
             install(ContentNegotiation) { json() }
             routing {
                 userMeRoutes(config)
+                sessionWriteRoutes(config)
                 userListRoutes(config)
             }
         }

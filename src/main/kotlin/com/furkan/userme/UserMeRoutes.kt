@@ -8,6 +8,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlin.time.toJavaDuration
 
 /**
  * Kullanicinin kendine dair uclari.
@@ -19,17 +20,33 @@ import io.ktor.server.routing.route
  * ```
  *
  * Uc noktalar (basePath'e gore, varsayilan `/me`):
- * - `POST {basePath}/session`  uygulama acilisinda oturum kaydi
- * - `GET  {basePath}`          benim bilgilerim (giris varsa hesap + oturum, yoksa `?deviceId=`)
+ * - `GET {basePath}`  benim bilgilerim (giris varsa hesap + oturum, yoksa `?deviceId=`).
+ *   Uygulamanin her acilista attigi istek budur: [UserMeConfig.readTracking] doluysa ayni
+ *   istek son gorulmeyi tazeler, acilisi sayar ve sorguda gelen profil alanlarini gunceller
+ *   (`?appVersion=2.3.0&language=tr`).
  *
- * Kayitli kullanicilarin listesi ayri monte edilir: [userListRoutes].
+ * Ayri monte edilenler: oturum yazma ucu [sessionWriteRoutes], kullanici listesi [userListRoutes].
  */
 fun Route.userMeRoutes(config: UserMeConfig) {
     val handlers = UserMeHandlers(config, UserMeSessions(config), UserMeUsers(config))
 
     route(config.basePath) {
-        post("/session") { handlers.upsertSession(call) }
         get { handlers.me(call) }
+    }
+}
+
+/**
+ * Oturum yazma ucu: `POST {basePath}/session`.
+ *
+ * AYRI monte edilir, cunku her projeye gerekmez. Girisi auth-lib ile yapan projeler oturumu
+ * zaten giris aninda yaziyor (giris olayinda [UserMeSessions.upsert] cagrilarak), bu ucu hic
+ * monte etmez. Kendi giris akisi olmayan projeler icin ise hazir bir yazma ucudur.
+ */
+fun Route.sessionWriteRoutes(config: UserMeConfig) {
+    val handlers = UserMeHandlers(config, UserMeSessions(config), UserMeUsers(config))
+
+    route(config.basePath) {
+        post("/session") { handlers.upsertSession(call) }
     }
 }
 
@@ -97,9 +114,49 @@ internal class UserMeHandlers(
 
         if (user == null) {
             call.respond(HttpStatusCode.NotFound, UserMeErrorResponse(error = "Kullanici bulunamadi"))
-        } else {
-            call.respond(user)
+            return
         }
+
+        // Bu uc uygulamanin her acilista attigi istektir; okuma ayni zamanda acilis sinyalidir.
+        val izleme = config.readTracking
+        if (izleme == null) {
+            call.respond(user)
+            return
+        }
+
+        val yazildi = users.touchOnRead(
+            sessionId = user.sessionId,
+            profile = call.profileUpdate(user),
+            minWriteInterval = izleme.minWriteInterval.toJavaDuration(),
+            newOpenAfter = izleme.newOpenAfter?.toJavaDuration()
+        )
+        call.respond(if (yazildi) users.findBySession(user.sessionId) ?: user else user)
+    }
+
+    /**
+     * Sorgudan gelen profil alanlari; sadece kayittakinden FARKLI olanlar doner, hicbiri
+     * degismediyse null. Boylece surum/dil degisiminde hemen yazilir, ayni degerler
+     * her acilista bosuna UPDATE uretmez.
+     */
+    private fun ApplicationCall.profileUpdate(current: UserListItem): SessionRequest? {
+        val p = request.queryParameters
+        fun farkli(vararg adlar: String, eski: String?): String? =
+            adlar.firstNotNullOfOrNull { p[it] }?.trim()?.takeIf { it.isNotEmpty() && it != eski }
+
+        val guncel = SessionRequest(
+            platform = farkli("platform", eski = current.platform),
+            appVersion = farkli("appVersion", "app_version", eski = current.appVersion),
+            appName = farkli("appName", "app_name", eski = current.appName),
+            language = farkli("language", eski = current.language),
+            city = farkli("city", eski = current.city),
+            latitude = p["latitude"]?.toDoubleOrNull()?.takeIf { it != current.latitude },
+            longitude = p["longitude"]?.toDoubleOrNull()?.takeIf { it != current.longitude }
+        )
+        val bosMu = listOf(
+            guncel.platform, guncel.appVersion, guncel.appName, guncel.language,
+            guncel.city, guncel.latitude, guncel.longitude
+        ).all { it == null }
+        return guncel.takeUnless { bosMu }
     }
 
     suspend fun listUsers(call: ApplicationCall) {
@@ -113,13 +170,22 @@ internal class UserMeHandlers(
             else -> null
         }
 
+        // Projeye ozel kolon adlariyla gelen parametreler ek filtre olur (orn. ?isPremium=true).
+        val bilinen = setOf("q", "language", "appVersion", "appName", "registered", "days", "page", "size")
+        val extraFilters = params.entries()
+            .filter { it.key !in bilinen }
+            .mapNotNull { entry -> entry.value.firstOrNull()?.let { entry.key to it } }
+            .toMap()
+
         val (items, total) = users.query(
             filter = UserQuery(
                 q = params["q"],
                 language = params["language"],
                 appVersion = params["appVersion"],
                 appName = params["appName"],
-                registered = registered
+                registered = registered,
+                days = params["days"]?.toIntOrNull(),
+                extras = extraFilters
             ),
             page = page,
             size = size

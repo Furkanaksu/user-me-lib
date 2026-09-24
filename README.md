@@ -25,7 +25,7 @@ dependencyResolutionManagement {
 }
 
 // build.gradle.kts
-implementation("com.github.Furkanaksu:user-me-lib:1.1.0")
+implementation("com.github.Furkanaksu:user-me-lib:2.0.0")
 ```
 
 ## Kullanım
@@ -56,23 +56,53 @@ val me = UserMeConfig(database = db)
 
 `basePath` varsayılanı `/me`:
 
-| Metot | Yol | Açıklama |
-| --- | --- | --- |
-| POST | `/me/session` | Uygulama açılışında oturum kaydı |
-| GET | `/me` | Giriş varsa hesabın bilgileri, yoksa `?deviceId=` ile cihazın bilgileri |
-| GET | `/users` | Sayfalı kullanıcı listesi — `q`, `language`, `appVersion`, `appName`, `registered`, `page`, `size` |
-| GET | `/users/filters` | Dropdown değerleri: diller, sürümler, uygulamalar |
+| Metot | Yol | Açıklama | Monte eden |
+| --- | --- | --- | --- |
+| GET | `/me` | Giriş varsa hesabın bilgileri, yoksa `?deviceId=` ile cihazın bilgileri | `userMeRoutes` |
+| POST | `/me/session` | Oturum kaydı | `sessionWriteRoutes` |
+| GET | `/users` | Sayfalı kullanıcı listesi — `q`, `language`, `appVersion`, `appName`, `registered`, `page`, `size` | `userListRoutes` |
+| GET | `/users/filters` | Dropdown değerleri: diller, sürümler, uygulamalar | `userListRoutes` |
 
 `/users` herkesin email'ini döndürür, bu yüzden **ayrı monte edilir** ve koruması projeye bırakılır:
 
 ```kotlin
 routing {
-    userMeRoutes(me)                              // uygulama uçları
+    userMeRoutes(me)                              // uygulama ucu
     authenticate("admin") { userListRoutes(me) }  // liste, senin kendi auth'unla
 }
 ```
 
-`POST /me/session` gövdesi — sadece `deviceId` zorunlu:
+### `GET /me` — uygulamanın her açılışta attığı istek
+
+Giriş (auth-lib'de `POST /auth/device` gibi) sadece elde geçerli token yokken yapılır: ilk
+kurulumda ve refresh başarısız olduğunda. Uygulamanın her açılışta attığı istek budur.
+
+`readTracking` verilirse aynı istek kaydı da tazeler:
+
+```kotlin
+UserMeConfig(
+    database = db,
+    readTracking = ReadTracking(
+        minWriteInterval = 5.minutes,   // kayıt bundan yeniyse lastSeenAt tekrar yazılmaz
+        newOpenAfter = 30.minutes       // bundan uzun sessizlik = yeni açılış, openCount + 1
+    )
+)
+```
+
+- Sorguda profil alanları gönderilebilir: `GET /me?appVersion=2.3.0&language=tr&platform=android`
+  (ayrıca `appName`, `city`, `latitude`, `longitude`; `app_version` / `app_name` da kabul edilir).
+- Değer değişmediyse `UPDATE` üretilmez; değiştiyse `minWriteInterval` beklenmeden hemen yazılır.
+- `readTracking` verilmezse `GET /me` hiçbir şey yazmaz.
+
+### Oturumu kim yazar
+
+`POST /me/session` **ayrı monte edilir** (`sessionWriteRoutes`), çünkü her projeye gerekmez:
+
+- **Girişi auth-lib ile yapan projeler** bu ucu hiç monte etmez. Oturum, giriş anında
+  `UserMeSessions.upsert(...)` ile yazılır; sonraki açılışlarda `GET /me` günceller.
+- **Kendi giriş akışı olmayan projeler** için hazır bir yazma ucudur.
+
+Gövde — sadece `deviceId` zorunlu:
 
 ```json
 {
@@ -183,6 +213,22 @@ Uygulamaya özel alanlar (premium, izinler...) ya `metadata` JSON'una konur ya d
 kendi tablosunda tutulur — SQL'de filtrelenmesi gerekiyorsa ikincisi daha uygundur.
 
 ## Sürüm notu
+
+`2.0.0` iki kırıcı değişiklik getirdi:
+
+1. `POST /me/session` artık `userMeRoutes` içinde değil, ayrı `sessionWriteRoutes` ile monte
+   edilir. 1.x'teki davranışı korumak için ikisini birden monte et:
+   ```kotlin
+   routing {
+       userMeRoutes(me)
+       sessionWriteRoutes(me)
+   }
+   ```
+2. `GET /me` okuma anında kaydı tazeleyebiliyor (`readTracking`). Varsayılan kapalıdır,
+   yani vermezsen davranış 1.x ile aynıdır.
+
+Ayrıca eklendi: projeye özel tabloları listeye bağlayan `ExtraSource`, ve `GET /me` sorgusundan
+profil güncelleme. Şema değişikliği yok.
 
 `1.1.0` kullanıcı listesini ekledi (`GET /users`, `/users/filters`, `UserMeUsers`, `AccountsSource`).
 `GET /me` artık oturumun yanında hesap bilgisini de içeren `UserListItem` döner; önceki sürümde

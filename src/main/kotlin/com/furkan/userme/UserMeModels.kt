@@ -67,6 +67,8 @@ data class UserListItem(
     val latitude: Double?,
     val longitude: Double?,
     val metadata: JsonObject,
+    /** Projeye ozel alanlar (premium, bildirim token'i...). Bkz. [ExtraSource]. */
+    val extras: JsonObject = JsonObject(emptyMap()),
     val openCount: Int,
     val firstSeenAt: String,
     val lastSeenAt: String

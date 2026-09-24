@@ -39,7 +39,10 @@ class UserMeTest {
     private fun ApplicationTestBuilder.setup(config: UserMeConfig) {
         application {
             install(ContentNegotiation) { json() }
-            routing { userMeRoutes(config) }
+            routing {
+                userMeRoutes(config)
+                sessionWriteRoutes(config)
+            }
         }
     }
 
